@@ -29,56 +29,73 @@ class CallAnalyzer:
     def parse_csv(self, content):
         lines = content.split('\n')
         calls = []
-        start_index = 0
+        
+        # 找到数据起始行（包含"开始时间"的列标题行）
+        header_index = -1
         for i, line in enumerate(lines):
             if '开始时间' in line:
-                start_index = i + 1
+                header_index = i
                 break
-        for i in range(start_index, len(lines)):
+        
+        if header_index == -1:
+            return calls
+        
+        # 解析列名
+        headers = lines[header_index].split(',')
+        headers = [h.strip().strip('"') for h in headers]
+        
+        # 找列索引
+        col_indices = {}
+        for idx, h in enumerate(headers):
+            h = h.replace(' ', '')
+            if '开始时间' in h:
+                col_indices['start_time'] = idx
+            elif '对方号码' in h or '对方号码（归属地）' in h:
+                col_indices['phone'] = idx
+            elif '通话时长' in h and '时长2' not in h:
+                col_indices['duration'] = idx
+            elif '类型' in h:
+                col_indices['type'] = idx
+        
+        # 跳过表头行
+        for i in range(header_index + 1, len(lines)):
             line = lines[i].strip()
             if not line or '合计' in line:
                 continue
+            
             parts = line.split(',')
-            if len(parts) >= 6:
-                call = {
-                    'type': parts[0].strip().strip('"'),
-                    'phone': parts[1].strip().strip('"'),
-                    'start_time': parts[2].strip().strip('"'),
-                    'duration': parts[3].strip().strip('"') or parts[4].strip().strip('"'),
-                    'duration_sec': self.parse_duration(parts[3].strip().strip('"') or parts[4].strip().strip('"')),
-                }
-                if call['phone'] and call['phone'] != self.user_phone and len(call['phone'].replace('-', '').replace(' ', '')) >= 7:
-                    calls.append(call)
-        return calls
-    
-    def parse_xls(self, file_path):
-        calls = []
-        try:
-            import pandas as pd
-            df = pd.read_csv(file_path, encoding='utf-8')
-        except:
-            try:
-                df = pd.read_csv(file_path, encoding='gbk')
-            except:
-                return calls
-        
-        for _, row in df.iterrows():
-            try:
-                phone = str(row.get('对方号码', '')).strip()
-                if not phone or len(phone) < 7:
-                    continue
-                duration = str(row.get('通话时长', row.get('通话时长2', '0秒')))
-                call = {
-                    'type': str(row.get('类型', '')).strip(),
-                    'phone': phone,
-                    'start_time': str(row.get('开始时间', '')).strip(),
-                    'duration': duration,
-                    'duration_sec': self.parse_duration(duration),
-                }
-                if call['phone'] != self.user_phone:
-                    calls.append(call)
-            except:
+            if len(parts) <= max(col_indices.values() if col_indices else []):
                 continue
+            
+            try:
+                # 根据列名获取值
+                phone_idx = col_indices.get('phone', 1)  # 默认第2列
+                duration_idx = col_indices.get('duration', 3)  # 默认第4列
+                type_idx = col_indices.get('type', 0)  # 默认第1列
+                time_idx = col_indices.get('start_time', 0)  # 默认第1列
+                
+                phone = str(parts[phone_idx]).strip().strip('"') if phone_idx < len(parts) else ''
+                duration = str(parts[duration_idx]).strip().strip('"') if duration_idx < len(parts) else '0秒'
+                call_type = str(parts[type_idx]).strip().strip('"') if type_idx < len(parts) else ''
+                start_time = str(parts[time_idx]).strip().strip('"') if time_idx < len(parts) else ''
+                
+                # 过滤
+                phone_clean = phone.replace('-', '').replace(' ', '').replace('"', '')
+                if not phone_clean or len(phone_clean) < 7:
+                    continue
+                if phone_clean == self.user_phone:
+                    continue
+                
+                calls.append({
+                    'type': call_type,
+                    'phone': phone,
+                    'start_time': start_time,
+                    'duration': duration,
+                    'duration_sec': self.parse_duration(duration)
+                })
+            except Exception as e:
+                continue
+        
         return calls
     
     def parse_xlsx(self, file_path):
@@ -86,21 +103,38 @@ class CallAnalyzer:
             import pandas as pd
             df = pd.read_excel(file_path)
             calls = []
+            
+            # 找列名
+            cols = df.columns.tolist()
+            col_map = {}
+            for c in cols:
+                c_clean = c.replace(' ', '')
+                if '开始时间' in c_clean:
+                    col_map['start_time'] = c
+                elif '对方号码' in c_clean:
+                    col_map['phone'] = c
+                elif '通话时长' in c_clean and '时长2' not in c_clean:
+                    col_map['duration'] = c
+                elif c == '类型':
+                    col_map['type'] = c
+            
             for _, row in df.iterrows():
                 try:
-                    phone = str(row.get('对方号码', '')).strip()
+                    phone = str(row.get(col_map.get('phone', '对方号码'), '')).strip()
                     if not phone or len(phone) < 7:
                         continue
-                    duration = str(row.get('通话时长', row.get('通话时长2', '0秒')))
+                    if phone == self.user_phone:
+                        continue
+                    
+                    duration = str(row.get(col_map.get('duration', '通话时长'), '0秒'))
                     call = {
-                        'type': str(row.get('类型', '')).strip(),
+                        'type': str(row.get(col_map.get('type', '类型'), '')).strip(),
                         'phone': phone,
-                        'start_time': str(row.get('开始时间', '')).strip(),
+                        'start_time': str(row.get(col_map.get('start_time', '开始时间'), '')).strip(),
                         'duration': duration,
                         'duration_sec': self.parse_duration(duration),
                     }
-                    if call['phone'] != self.user_phone:
-                        calls.append(call)
+                    calls.append(call)
                 except:
                     continue
             return calls
@@ -334,11 +368,10 @@ class CallAnalyzerApp:
                     with open(file_path, 'r', encoding='utf-8') as f:
                         content = f.read()
                     calls = self.analyzer.parse_csv(content)
+                    self.analyzer.calls.extend(calls)
                 elif ext in ['.xls', '.xlsx']:
-                    calls = self.analyzer.parse_xlsx(file_path) if ext == '.xlsx' else self.analyzer.parse_xls(file_path)
-                else:
-                    continue
-                self.analyzer.calls.extend(calls)
+                    calls = self.analyzer.parse_xlsx(file_path)
+                    self.analyzer.calls.extend(calls)
             except Exception as e:
                 print(f'解析失败 {file_path}: {e}')
         
