@@ -33,51 +33,63 @@ class CallAnalyzer:
         # 找到数据起始行（包含"开始时间"的列标题行）
         header_index = -1
         for i, line in enumerate(lines):
-            if '开始时间' in line:
+            if '开始时间' in line or '起始时间' in line:
                 header_index = i
                 break
         
         if header_index == -1:
+            print('未找到"开始时间"列')
             return calls
         
         # 解析列名
         headers = lines[header_index].split(',')
         headers = [h.strip().strip('"') for h in headers]
         
+        print(f'列名: {headers}')
+        
         # 找列索引
         col_indices = {}
         for idx, h in enumerate(headers):
-            h = h.replace(' ', '')
-            if '开始时间' in h:
+            h_clean = h.replace(' ', '').replace('　', '')
+            if '开始时间' in h_clean or '起始时间' in h_clean:
                 col_indices['start_time'] = idx
-            elif '对方号码' in h or '对方号码（归属地）' in h:
+            elif '对方号码' in h_clean or '对方号码（归属地）' in h_clean:
                 col_indices['phone'] = idx
-            elif '通话时长' in h and '时长2' not in h:
+            elif '通话时长' in h_clean and '时长2' not in h_clean:
                 col_indices['duration'] = idx
-            elif '类型' in h:
+            elif h in ['类型', '呼叫类型']:
                 col_indices['type'] = idx
+            elif '时长' in h_clean:
+                col_indices['duration_alt'] = idx
+        
+        print(f'找到的列: {col_indices}')
+        
+        if 'phone' not in col_indices:
+            print('未找到电话号码列')
+            return calls
         
         # 跳过表头行
+        data_count = 0
         for i in range(header_index + 1, len(lines)):
             line = lines[i].strip()
             if not line or '合计' in line:
                 continue
             
             parts = line.split(',')
-            if len(parts) <= max(col_indices.values() if col_indices else []):
+            if len(parts) <= max(col_indices.values() if col_indices else [0]):
                 continue
             
             try:
                 # 根据列名获取值
-                phone_idx = col_indices.get('phone', 1)  # 默认第2列
-                duration_idx = col_indices.get('duration', 3)  # 默认第4列
-                type_idx = col_indices.get('type', 0)  # 默认第1列
-                time_idx = col_indices.get('start_time', 0)  # 默认第1列
+                phone_idx = col_indices.get('phone', 1)
+                duration_idx = col_indices.get('duration', col_indices.get('duration_alt', 3))
+                type_idx = col_indices.get('type', -1)
+                time_idx = col_indices.get('start_time', -1)
                 
-                phone = str(parts[phone_idx]).strip().strip('"') if phone_idx < len(parts) else ''
-                duration = str(parts[duration_idx]).strip().strip('"') if duration_idx < len(parts) else '0秒'
-                call_type = str(parts[type_idx]).strip().strip('"') if type_idx < len(parts) else ''
-                start_time = str(parts[time_idx]).strip().strip('"') if time_idx < len(parts) else ''
+                phone = str(parts[phone_idx]).strip().strip('"') if phone_idx >= 0 and phone_idx < len(parts) else ''
+                duration = str(parts[duration_idx]).strip().strip('"') if duration_idx >= 0 and duration_idx < len(parts) else '0秒'
+                call_type = str(parts[type_idx]).strip().strip('"') if type_idx >= 0 and type_idx < len(parts) else ''
+                start_time = str(parts[time_idx]).strip().strip('"') if time_idx >= 0 and time_idx < len(parts) else ''
                 
                 # 过滤
                 phone_clean = phone.replace('-', '').replace(' ', '').replace('"', '')
@@ -93,9 +105,11 @@ class CallAnalyzer:
                     'duration': duration,
                     'duration_sec': self.parse_duration(duration)
                 })
+                data_count += 1
             except Exception as e:
                 continue
         
+        print(f'解析到 {data_count} 条记录')
         return calls
     
     def parse_xlsx(self, file_path):
