@@ -12,7 +12,6 @@ class CallAnalyzer:
         self.user_phone = ''
     
     def parse_duration(self, duration):
-        """通话时长已经是秒为单位"""
         if not duration:
             return 0
         try:
@@ -24,7 +23,6 @@ class CallAnalyzer:
         lines = content.split('\n')
         calls = []
         
-        # 找到列名行
         header_index = -1
         for i, line in enumerate(lines):
             if '开始时间' in line:
@@ -35,11 +33,9 @@ class CallAnalyzer:
             print('未找到"开始时间"列')
             return calls
         
-        # 解析列名
         headers = lines[header_index].split(',')
         headers = [h.strip().strip('"') for h in headers]
         
-        # 找列索引（前8列是主要数据）
         col_indices = {}
         for idx, h in enumerate(headers[:8]):
             h_clean = h.replace(' ', '').replace('　', '')
@@ -54,14 +50,10 @@ class CallAnalyzer:
             elif '对端号码' in h_clean or '对方号码' in h_clean:
                 col_indices['phone'] = idx
         
-        print(f'列名: {headers[:8]}')
-        print(f'列索引: {col_indices}')
-        
         if 'phone' not in col_indices:
             print('未找到电话号码列')
             return calls
         
-        # 跳过表头行，解析数据
         data_count = 0
         for i in range(header_index + 1, len(lines)):
             line = lines[i].strip()
@@ -73,7 +65,6 @@ class CallAnalyzer:
                 continue
             
             try:
-                # 获取各字段值
                 phone_idx = col_indices.get('phone', 5)
                 duration_idx = col_indices.get('duration', 4)
                 type_idx = col_indices.get('type', 1)
@@ -86,14 +77,11 @@ class CallAnalyzer:
                 start_time = str(parts[time_idx]).strip().strip('"') if time_idx >= 0 and time_idx < len(parts) else ''
                 user_phone = str(parts[user_phone_idx]).strip().strip('"') if user_phone_idx >= 0 and user_phone_idx < len(parts) else ''
                 
-                # 提取纯数字号码
                 phone_clean = re.sub(r'[^\d]', '', phone)
                 user_phone_clean = re.sub(r'[^\d]', '', user_phone)
                 
                 if not phone_clean or len(phone_clean) < 7:
                     continue
-                
-                # 过滤自己的号码
                 if user_phone_clean and phone_clean == user_phone_clean:
                     continue
                 
@@ -105,21 +93,19 @@ class CallAnalyzer:
                     'duration_sec': self.parse_duration(duration)
                 })
                 data_count += 1
-            except Exception as e:
+            except:
                 continue
         
-        print(f'解析到 {data_count} 条记录')
+        print(f'CSV解析到 {data_count} 条记录')
         return calls
     
     def parse_xls(self, file_path):
-        """解析xls文件（支持WPS格式）"""
         try:
             import xlrd
             book = xlrd.open_workbook(file_path)
             sheet = book.sheet_by_index(0)
             calls = []
             
-            # 找列名行
             header_row = None
             for i in range(min(5, sheet.nrows)):
                 row_values = sheet.row_values(i)
@@ -131,11 +117,9 @@ class CallAnalyzer:
                 print('未找到"开始时间"列')
                 return calls
             
-            # 解析列名
             headers = sheet.row_values(header_row)
             print(f'XLS列名: {headers[:8]}')
             
-            # 找列索引
             col_indices = {}
             for idx, h in enumerate(headers[:8]):
                 h_str = str(h).replace(' ', '').replace('　', '')
@@ -156,7 +140,6 @@ class CallAnalyzer:
                 print('XLS未找到电话号码列')
                 return calls
             
-            # 解析数据
             data_count = 0
             for row_idx in range(header_row + 1, sheet.nrows):
                 try:
@@ -200,7 +183,6 @@ class CallAnalyzer:
             return []
     
     def parse_xlsx(self, file_path):
-        """解析xlsx文件"""
         try:
             import pandas as pd
             df = pd.read_excel(file_path)
@@ -208,7 +190,6 @@ class CallAnalyzer:
             
             print(f'XLSX列名: {df.columns.tolist()[:8]}')
             
-            # 找列索引
             cols = df.columns.tolist()
             col_map = {}
             for c in cols:
@@ -223,8 +204,6 @@ class CallAnalyzer:
                     col_map['type'] = c
                 elif '用户号码' in c_clean:
                     col_map['user_phone'] = c
-            
-            print(f'XLSX列映射: {col_map}')
             
             for _, row in df.iterrows():
                 try:
@@ -313,6 +292,7 @@ class CallAnalyzer:
         hour_dist = [0] * 24
         day_dist = [0] * 7
         days = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
+        
         for c in self.calls:
             m = re.match(r'(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2})', c['start_time'])
             if m:
@@ -320,11 +300,15 @@ class CallAnalyzer:
                 date = datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)))
                 hour_dist[hour] += 1
                 day_dist[date.weekday()] += 1
+        
         night_calls = sum(hour_dist[22:]) + sum(hour_dist[:6])
         max_count = max(hour_dist) if hour_dist else 0
         peak_hours = [f'{h:02d}:00' for h, c in enumerate(hour_dist) if c == max_count and max_count > 0]
         max_day = max(day_dist) if day_dist else 0
         peak_day = days[day_dist.index(max_day)] if max_day > 0 else '-'
+        
+        print(f'时间分析: 高峰时段={peak_hours}, 高峰日={peak_day}, 熬夜={night_calls}次')
+        
         return {
             'hour_dist': hour_dist,
             'day_dist': day_dist,
@@ -342,6 +326,9 @@ class CallAnalyzerApp:
         self.root.geometry('1000x700')
         self.analyzer = CallAnalyzer()
         self.setup_ui()
+        
+        # 强制更新窗口大小
+        self.root.update_idletasks()
     
     def setup_ui(self):
         top_frame = tk.Frame(self.root, bg='#667eea', pady=15)
@@ -428,6 +415,7 @@ class CallAnalyzerApp:
         self.create_table(self.tab_frequent, ['号码', '次数', '时长'], 'frequent_table')
     
     def setup_time_tab(self):
+        # 高峰时段卡片
         cards_frame = tk.Frame(self.tab_time)
         cards_frame.pack(fill='x', padx=10, pady=10)
         
@@ -442,11 +430,13 @@ class CallAnalyzerApp:
             tk.Label(card, text=label, font=('Microsoft YaHei', 9), fg='white', bg=color).pack()
             self.time_cards.append(card)
         
-        hour_frame = tk.LabelFrame(self.tab_time, text='📊 按小时分布', font=('Microsoft YaHei', 11), padx=15, pady=15)
+        # 小时分布图
+        hour_frame = tk.LabelFrame(self.tab_time, text='📊 按小时分布（22:00-06:00为熬夜时段）', font=('Microsoft YaHei', 11), padx=15, pady=15)
         hour_frame.pack(fill='x', padx=10, pady=10)
         self.hour_canvas = tk.Canvas(hour_frame, height=120, bg='white')
         self.hour_canvas.pack(fill='x', pady=5)
         
+        # 星期分布图
         week_frame = tk.LabelFrame(self.tab_time, text='📅 按星期分布', font=('Microsoft YaHei', 11), padx=15, pady=15)
         week_frame.pack(fill='x', padx=10, pady=10)
         self.week_frame = tk.Frame(week_frame)
@@ -562,23 +552,40 @@ class CallAnalyzerApp:
                 if isinstance(child, tk.Label):
                     child.config(text=value, font=('Microsoft YaHei', 14, 'bold'))
         
-        self.hour_canvas.delete('all')
-        max_hour = max(time_data['hour_dist']) if max(time_data['hour_dist']) > 0 else 1
-        width = self.hour_canvas.winfo_width()
-        bar_width = max(5, (width - 50) / 24)
+        # 强制更新窗口
+        self.root.update()
         
-        for i, count in enumerate(time_data['hour_dist']):
+        # 绘制小时柱状图
+        self.hour_canvas.delete('all')
+        hour_data = time_data['hour_dist']
+        max_hour = max(hour_data) if max(hour_data) > 0 else 1
+        
+        # 获取画布实际宽度
+        canvas_width = self.hour_canvas.winfo_width()
+        if canvas_width <= 1:
+            canvas_width = 800  # 默认宽度
+        
+        bar_width = max(15, (canvas_width - 80) / 24)
+        
+        for i, count in enumerate(hour_data):
             height = (count / max_hour) * 100
-            x = 25 + i * bar_width
+            x = 40 + i * bar_width
             y = 120 - height
+            # 蓝色=白天(8-22点)，红色=熬夜(22-6点)
             color = '#667eea' if 8 <= i <= 22 else '#f5576c'
             self.hour_canvas.create_rectangle(x, y, x + bar_width - 2, 120, fill=color, outline='')
+            if count > 0:
+                self.hour_canvas.create_text(x + bar_width/2, y - 5, text=str(count), font=('Arial', 8))
         
+        # 绘制星期柱状图
         for widget in self.week_frame.winfo_children():
             widget.destroy()
         
-        max_day = max(time_data['day_dist']) if max(time_data['day_dist']) > 0 else 1
-        for i, (day, count) in enumerate(zip(time_data['day_names'], time_data['day_dist'])):
+        day_data = time_data['day_dist']
+        days = time_data['day_names']
+        max_day = max(day_data) if max(day_data) > 0 else 1
+        
+        for i, (day, count) in enumerate(zip(days, day_data)):
             frame = tk.Frame(self.week_frame)
             frame.pack(side='left', expand=True, padx=3)
             height = (count / max_day) * 80
