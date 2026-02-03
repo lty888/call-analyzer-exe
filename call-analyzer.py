@@ -4,7 +4,7 @@ from tkinter import filedialog, messagebox, ttk
 import csv
 import os
 from datetime import datetime
-import threading
+import re
 
 class CallAnalyzer:
     def __init__(self):
@@ -14,15 +14,14 @@ class CallAnalyzer:
     def parse_duration(self, duration):
         if not duration:
             return 0
-        match = duration.replace('：', ':').replace('，', ',').replace('"', '')
-        import re
-        m = re.match(r'(\d{1,2}):(\d{2}):(\d{2})', match)
+        duration = str(duration).replace('：', ':').replace('，', ',').replace('"', '')
+        m = re.match(r'(\d{1,2}):(\d{2}):(\d{2})', duration)
         if m:
             return int(m.group(1)) * 3600 + int(m.group(2)) * 60 + int(m.group(3))
-        m = re.match(r'(\d+)分(\d+)秒', match)
+        m = re.match(r'(\d+)分(\d+)秒', duration)
         if m:
             return int(m.group(1)) * 60 + int(m.group(2))
-        m = re.match(r'(\d+)秒', match)
+        m = re.match(r'(\d+)秒', duration)
         if m:
             return int(m.group(1))
         return 0
@@ -51,6 +50,63 @@ class CallAnalyzer:
                 if call['phone'] and call['phone'] != self.user_phone and len(call['phone'].replace('-', '').replace(' ', '')) >= 7:
                     calls.append(call)
         return calls
+    
+    def parse_xls(self, file_path):
+        calls = []
+        try:
+            import pandas as pd
+            df = pd.read_csv(file_path, encoding='utf-8')
+        except:
+            try:
+                df = pd.read_csv(file_path, encoding='gbk')
+            except:
+                return calls
+        
+        for _, row in df.iterrows():
+            try:
+                phone = str(row.get('对方号码', '')).strip()
+                if not phone or len(phone) < 7:
+                    continue
+                duration = str(row.get('通话时长', row.get('通话时长2', '0秒')))
+                call = {
+                    'type': str(row.get('类型', '')).strip(),
+                    'phone': phone,
+                    'start_time': str(row.get('开始时间', '')).strip(),
+                    'duration': duration,
+                    'duration_sec': self.parse_duration(duration),
+                }
+                if call['phone'] != self.user_phone:
+                    calls.append(call)
+            except:
+                continue
+        return calls
+    
+    def parse_xlsx(self, file_path):
+        try:
+            import pandas as pd
+            df = pd.read_excel(file_path)
+            calls = []
+            for _, row in df.iterrows():
+                try:
+                    phone = str(row.get('对方号码', '')).strip()
+                    if not phone or len(phone) < 7:
+                        continue
+                    duration = str(row.get('通话时长', row.get('通话时长2', '0秒')))
+                    call = {
+                        'type': str(row.get('类型', '')).strip(),
+                        'phone': phone,
+                        'start_time': str(row.get('开始时间', '')).strip(),
+                        'duration': duration,
+                        'duration_sec': self.parse_duration(duration),
+                    }
+                    if call['phone'] != self.user_phone:
+                        calls.append(call)
+                except:
+                    continue
+            return calls
+        except Exception as e:
+            print(f'解析xlsx失败: {e}')
+            return []
     
     def set_user_phone(self, phone):
         self.user_phone = phone
@@ -101,7 +157,6 @@ class CallAnalyzer:
         day_dist = [0] * 7
         days = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
         for c in self.calls:
-            import re
             m = re.match(r'(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2})', c['start_time'])
             if m:
                 hour = int(m.group(4))
@@ -109,9 +164,10 @@ class CallAnalyzer:
                 hour_dist[hour] += 1
                 day_dist[date.weekday()] += 1
         night_calls = sum(hour_dist[22:]) + sum(hour_dist[:6])
-        max_count = max(hour_dist)
+        max_count = max(hour_dist) if hour_dist else 0
         peak_hours = [f'{h:02d}:00' for h, c in enumerate(hour_dist) if c == max_count and max_count > 0]
-        peak_day = days[day_dist.index(max(day_dist))] if max(day_dist) > 0 else '-'
+        max_day = max(day_dist) if day_dist else 0
+        peak_day = days[day_dist.index(max_day)] if max_day > 0 else '-'
         return {
             'hour_dist': hour_dist,
             'day_dist': day_dist,
@@ -131,17 +187,14 @@ class CallAnalyzerApp:
         self.setup_ui()
     
     def setup_ui(self):
-        # 顶部
         top_frame = tk.Frame(self.root, bg='#667eea', pady=15)
         top_frame.pack(fill='x')
         tk.Label(top_frame, text='📱 话单分析工具', font=('Microsoft YaHei', 18, 'bold'), fg='white', bg='#667eea').pack()
-        tk.Label(top_frame, text='支持通话统计、联系人分析、时间分析', font=('Microsoft YaHei', 10), fg='white', bg='#667eea').pack()
+        tk.Label(top_frame, text='支持 CSV、XLS、XLSX 格式', font=('Microsoft YaHei', 10), fg='white', bg='#667eea').pack()
         
-        # 主内容
         main_frame = tk.Frame(self.root, padx=20, pady=20)
         main_frame.pack(fill='both', expand=True)
         
-        # 导入区域
         import_frame = tk.LabelFrame(main_frame, text='📁 导入话单', font=('Microsoft YaHei', 12), padx=15, pady=15)
         import_frame.pack(fill='x', pady=(0, 20))
         
@@ -151,17 +204,15 @@ class CallAnalyzerApp:
         tk.Button(btn_frame, text='🚀 开始分析', font=('Microsoft YaHei', 11), command=self.start_analysis, bg='#38ef7d', fg='white', padx=15, pady=8).pack(side='left', padx=5)
         tk.Button(btn_frame, text='🗑️ 清除', font=('Microsoft YaHei', 11), command=self.clear_data, bg='#f5576c', fg='white', padx=15, pady=8).pack(side='left', padx=5)
         
-        self.file_label = tk.Label(import_frame, text='未选择文件', font=('Microsoft YaHei', 10), fg='#888')
+        self.file_label = tk.Label(import_frame, text='支持 CSV、XLS、XLSX 格式，可多选', font=('Microsoft YaHei', 10), fg='#888')
         self.file_label.pack(pady=10)
         
-        # 用户手机号
         phone_frame = tk.Frame(import_frame)
         phone_frame.pack(pady=10)
         tk.Label(phone_frame, text='📱 我的手机号（过滤自己的号码）:', font=('Microsoft YaHei', 10)).pack(side='left')
         self.phone_entry = tk.Entry(phone_frame, font=('Microsoft YaHei', 10), width=15)
         self.phone_entry.pack(side='left', padx=5)
         
-        # 标签页
         self.notebook = ttk.Notebook(main_frame)
         self.notebook.pack(fill='both', expand=True)
         
@@ -178,7 +229,6 @@ class CallAnalyzerApp:
         self.setup_time_tab()
     
     def setup_stats_tab(self):
-        # 统计卡片
         cards_frame = tk.Frame(self.tab_stats)
         cards_frame.pack(fill='x', padx=10, pady=10)
         
@@ -193,7 +243,6 @@ class CallAnalyzerApp:
             tk.Label(card, text=label, font=('Microsoft YaHei', 10), fg='white', bg=color).pack()
             self.stat_cards.append(card)
         
-        # 主被叫分布
         dist_frame = tk.LabelFrame(self.tab_stats, text='📈 主叫/被叫分布', font=('Microsoft YaHei', 11), padx=15, pady=15)
         dist_frame.pack(fill='x', padx=10, pady=10)
         
@@ -206,7 +255,6 @@ class CallAnalyzerApp:
         tk.Label(dist_frame, text='主叫: 0 次', font=('Microsoft YaHei', 10), anchor='w').pack(fill='x')
     
     def setup_contacts_tab(self):
-        # 子标签页
         sub_notebook = ttk.Notebook(self.tab_contacts)
         sub_notebook.pack(fill='both', expand=True, padx=10, pady=10)
         
@@ -223,7 +271,6 @@ class CallAnalyzerApp:
         self.create_table(self.tab_frequent, ['号码', '次数', '时长'], 'frequent_table')
     
     def setup_time_tab(self):
-        # 统计卡片
         cards_frame = tk.Frame(self.tab_time)
         cards_frame.pack(fill='x', padx=10, pady=10)
         
@@ -238,13 +285,11 @@ class CallAnalyzerApp:
             tk.Label(card, text=label, font=('Microsoft YaHei', 9), fg='white', bg=color).pack()
             self.time_cards.append(card)
         
-        # 小时分布
         hour_frame = tk.LabelFrame(self.tab_time, text='📊 按小时分布', font=('Microsoft YaHei', 11), padx=15, pady=15)
         hour_frame.pack(fill='x', padx=10, pady=10)
         self.hour_canvas = tk.Canvas(hour_frame, height=120, bg='white')
         self.hour_canvas.pack(fill='x', pady=5)
         
-        # 星期分布
         week_frame = tk.LabelFrame(self.tab_time, text='📅 按星期分布', font=('Microsoft YaHei', 11), padx=15, pady=15)
         week_frame.pack(fill='x', padx=10, pady=10)
         self.week_frame = tk.Frame(week_frame)
@@ -267,7 +312,7 @@ class CallAnalyzerApp:
         setattr(self, var_name, tree)
     
     def select_files(self):
-        files = filedialog.askopenfilenames(filetypes=[('CSV文件', '*.csv'), ('所有文件', '*.*')])
+        files = filedialog.askopenfilenames(filetypes=[('话单文件', '*.csv *.xls *.xlsx'), ('CSV文件', '*.csv'), ('Excel文件', '*.xls *.xlsx'), ('所有文件', '*.*')])
         if files:
             self.selected_files = files
             self.file_label.config(text=f'已选择 {len(files)} 个文件')
@@ -284,9 +329,15 @@ class CallAnalyzerApp:
         
         for file_path in self.selected_files:
             try:
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    content = f.read()
-                calls = self.analyzer.parse_csv(content)
+                ext = os.path.splitext(file_path)[1].lower()
+                if ext == '.csv':
+                    with open(file_path, 'r', encoding='utf-8') as f:
+                        content = f.read()
+                    calls = self.analyzer.parse_csv(content)
+                elif ext in ['.xls', '.xlsx']:
+                    calls = self.analyzer.parse_xlsx(file_path) if ext == '.xlsx' else self.analyzer.parse_xls(file_path)
+                else:
+                    continue
                 self.analyzer.calls.extend(calls)
             except Exception as e:
                 print(f'解析失败 {file_path}: {e}')
@@ -298,7 +349,8 @@ class CallAnalyzerApp:
     
     def update_stats(self):
         stats = self.analyzer.get_statistics()
-        values = [f"{stats['total_calls']} 次", stats['total_duration'], stats['avg_duration'], f"{self.analyzer.get_contacts()['top'] if hasattr(self.analyzer.get_contacts(), '__len__') else len(self.analyzer.get_contacts())} 人"]
+        contacts = self.analyzer.get_contacts()
+        values = [f"{stats['total_calls']} 次", stats['total_duration'], stats['avg_duration'], f"{len(contacts['top'])} 人"]
         
         for i, (card, value) in enumerate(zip(self.stat_cards, values)):
             for child in card.winfo_children():
@@ -313,8 +365,12 @@ class CallAnalyzerApp:
         outgoing = stats['outgoing']
         total = incoming + outgoing
         
-        tk.Label(self.incoming_bar.master, text=f'被叫: {incoming} 次 ({round(incoming/total*100) if total > 0 else 0}%)', font=('Microsoft YaHei', 10), anchor='w').pack(fill='x')
-        tk.Label(self.outgoing_bar.master, text=f'主叫: {outgoing} 次 ({round(outgoing/total*100) if total > 0 else 0}%)', font=('Microsoft YaHei', 10), anchor='w').pack(fill='x')
+        for widget in self.incoming_bar.master.winfo_children():
+            if isinstance(widget, tk.Label) and '被叫' in widget.cget('text'):
+                widget.config(text=f'被叫: {incoming} 次 ({round(incoming/total*100) if total > 0 else 0}%)')
+        for widget in self.outgoing_bar.master.winfo_children():
+            if isinstance(widget, tk.Label) and '主叫' in widget.cget('text'):
+                widget.config(text=f'主叫: {outgoing} 次 ({round(outgoing/total*100) if total > 0 else 0}%)')
         
         self.incoming_bar.config(width=max(1, int(300 * incoming / total)) if total > 0 else 1)
         self.outgoing_bar.config(width=max(1, int(300 * outgoing / total)) if total > 0 else 1)
@@ -347,7 +403,6 @@ class CallAnalyzerApp:
                 if isinstance(child, tk.Label):
                     child.config(text=value, font=('Microsoft YaHei', 14, 'bold'))
         
-        # 绘制小时分布
         self.hour_canvas.delete('all')
         max_hour = max(time_data['hour_dist']) if max(time_data['hour_dist']) > 0 else 1
         width = self.hour_canvas.winfo_width()
@@ -360,7 +415,6 @@ class CallAnalyzerApp:
             color = '#667eea' if 8 <= i <= 22 else '#f5576c'
             self.hour_canvas.create_rectangle(x, y, x + bar_width - 2, 120, fill=color, outline='')
         
-        # 绘制星期分布
         for widget in self.week_frame.winfo_children():
             widget.destroy()
         
@@ -381,7 +435,7 @@ class CallAnalyzerApp:
         self.analyzer.calls = []
         self.analyzer.user_phone = ''
         self.selected_files = []
-        self.file_label.config(text='未选择文件')
+        self.file_label.config(text='支持 CSV、XLS、XLSX 格式，可多选')
         self.phone_entry.delete(0, 'end')
         
         for item in self.freq_table.get_children():
