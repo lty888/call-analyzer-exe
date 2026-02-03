@@ -12,28 +12,22 @@ class CallAnalyzer:
         self.user_phone = ''
     
     def parse_duration(self, duration):
+        """通话时长已经是秒为单位"""
         if not duration:
             return 0
-        duration = str(duration).replace('：', ':').replace('，', ',').replace('"', '')
-        m = re.match(r'(\d{1,2}):(\d{2}):(\d{2})', duration)
-        if m:
-            return int(m.group(1)) * 3600 + int(m.group(2)) * 60 + int(m.group(3))
-        m = re.match(r'(\d+)分(\d+)秒', duration)
-        if m:
-            return int(m.group(1)) * 60 + int(m.group(2))
-        m = re.match(r'(\d+)秒', duration)
-        if m:
-            return int(m.group(1))
-        return 0
+        try:
+            return int(float(str(duration)))
+        except:
+            return 0
     
     def parse_csv(self, content):
         lines = content.split('\n')
         calls = []
         
-        # 找到数据起始行（包含"开始时间"的列标题行）
+        # 找到列名行
         header_index = -1
         for i, line in enumerate(lines):
-            if '开始时间' in line or '起始时间' in line:
+            if '开始时间' in line:
                 header_index = i
                 break
         
@@ -45,30 +39,29 @@ class CallAnalyzer:
         headers = lines[header_index].split(',')
         headers = [h.strip().strip('"') for h in headers]
         
-        print(f'列名: {headers}')
-        
-        # 找列索引
+        # 找列索引（前8列是主要数据）
         col_indices = {}
-        for idx, h in enumerate(headers):
+        for idx, h in enumerate(headers[:8]):
             h_clean = h.replace(' ', '').replace('　', '')
-            if '开始时间' in h_clean or '起始时间' in h_clean:
+            if '开始时间' in h_clean:
                 col_indices['start_time'] = idx
-            elif '对方号码' in h_clean or '对方号码（归属地）' in h_clean:
-                col_indices['phone'] = idx
-            elif '通话时长' in h_clean and '时长2' not in h_clean:
-                col_indices['duration'] = idx
-            elif h in ['类型', '呼叫类型']:
+            elif '事件类型' in h_clean or '类型' in h_clean:
                 col_indices['type'] = idx
-            elif '时长' in h_clean:
-                col_indices['duration_alt'] = idx
+            elif '用户号码' in h_clean:
+                col_indices['user_phone'] = idx
+            elif '通话时长' in h_clean:
+                col_indices['duration'] = idx
+            elif '对端号码' in h_clean or '对方号码' in h_clean:
+                col_indices['phone'] = idx
         
-        print(f'找到的列: {col_indices}')
+        print(f'列名: {headers[:8]}')
+        print(f'列索引: {col_indices}')
         
         if 'phone' not in col_indices:
             print('未找到电话号码列')
             return calls
         
-        # 跳过表头行
+        # 跳过表头行，解析数据
         data_count = 0
         for i in range(header_index + 1, len(lines)):
             line = lines[i].strip()
@@ -80,22 +73,28 @@ class CallAnalyzer:
                 continue
             
             try:
-                # 根据列名获取值
-                phone_idx = col_indices.get('phone', 1)
-                duration_idx = col_indices.get('duration', col_indices.get('duration_alt', 3))
-                type_idx = col_indices.get('type', -1)
-                time_idx = col_indices.get('start_time', -1)
+                # 获取各字段值
+                phone_idx = col_indices.get('phone', 5)
+                duration_idx = col_indices.get('duration', 4)
+                type_idx = col_indices.get('type', 1)
+                time_idx = col_indices.get('start_time', 0)
+                user_phone_idx = col_indices.get('user_phone', 2)
                 
-                phone = str(parts[phone_idx]).strip().strip('"') if phone_idx >= 0 and phone_idx < len(parts) else ''
-                duration = str(parts[duration_idx]).strip().strip('"') if duration_idx >= 0 and duration_idx < len(parts) else '0秒'
+                phone = str(parts[phone_idx]).strip().strip('"') if phone_idx < len(parts) else ''
+                duration = str(parts[duration_idx]).strip().strip('"') if duration_idx < len(parts) else '0'
                 call_type = str(parts[type_idx]).strip().strip('"') if type_idx >= 0 and type_idx < len(parts) else ''
                 start_time = str(parts[time_idx]).strip().strip('"') if time_idx >= 0 and time_idx < len(parts) else ''
+                user_phone = str(parts[user_phone_idx]).strip().strip('"') if user_phone_idx >= 0 and user_phone_idx < len(parts) else ''
                 
-                # 过滤
-                phone_clean = phone.replace('-', '').replace(' ', '').replace('"', '')
+                # 提取纯数字号码
+                phone_clean = re.sub(r'[^\d]', '', phone)
+                user_phone_clean = re.sub(r'[^\d]', '', user_phone)
+                
                 if not phone_clean or len(phone_clean) < 7:
                     continue
-                if phone_clean == self.user_phone:
+                
+                # 过滤自己的号码
+                if user_phone_clean and phone_clean == user_phone_clean:
                     continue
                 
                 calls.append({
@@ -112,45 +111,148 @@ class CallAnalyzer:
         print(f'解析到 {data_count} 条记录')
         return calls
     
+    def parse_xls(self, file_path):
+        """解析xls文件（支持WPS格式）"""
+        try:
+            import xlrd
+            book = xlrd.open_workbook(file_path)
+            sheet = book.sheet_by_index(0)
+            calls = []
+            
+            # 找列名行
+            header_row = None
+            for i in range(min(5, sheet.nrows)):
+                row_values = sheet.row_values(i)
+                if '开始时间' in str(row_values):
+                    header_row = i
+                    break
+            
+            if header_row is None:
+                print('未找到"开始时间"列')
+                return calls
+            
+            # 解析列名
+            headers = sheet.row_values(header_row)
+            print(f'XLS列名: {headers[:8]}')
+            
+            # 找列索引
+            col_indices = {}
+            for idx, h in enumerate(headers[:8]):
+                h_str = str(h).replace(' ', '').replace('　', '')
+                if '开始时间' in h_str:
+                    col_indices['start_time'] = idx
+                elif '事件类型' in h_str or h_str == '类型':
+                    col_indices['type'] = idx
+                elif '用户号码' in h_str:
+                    col_indices['user_phone'] = idx
+                elif '通话时长' in h_str:
+                    col_indices['duration'] = idx
+                elif '对端号码' in h_str or '对方号码' in h_str:
+                    col_indices['phone'] = idx
+            
+            print(f'XLS列索引: {col_indices}')
+            
+            if 'phone' not in col_indices:
+                print('XLS未找到电话号码列')
+                return calls
+            
+            # 解析数据
+            data_count = 0
+            for row_idx in range(header_row + 1, sheet.nrows):
+                try:
+                    row = sheet.row(row_idx)
+                    
+                    phone_idx = col_indices.get('phone', 5)
+                    duration_idx = col_indices.get('duration', 4)
+                    type_idx = col_indices.get('type', 1)
+                    time_idx = col_indices.get('start_time', 0)
+                    user_phone_idx = col_indices.get('user_phone', 2)
+                    
+                    phone = str(row[phone_idx].value).strip() if phone_idx < len(row) else ''
+                    duration = str(row[duration_idx].value).strip() if duration_idx < len(row) else '0'
+                    call_type = str(row[type_idx].value).strip() if type_idx >= 0 and type_idx < len(row) else ''
+                    start_time = str(row[time_idx].value).strip() if time_idx >= 0 and time_idx < len(row) else ''
+                    user_phone = str(row[user_phone_idx].value).strip() if user_phone_idx >= 0 and user_phone_idx < len(row) else ''
+                    
+                    phone_clean = re.sub(r'[^\d]', '', phone)
+                    user_phone_clean = re.sub(r'[^\d]', '', user_phone)
+                    
+                    if not phone_clean or len(phone_clean) < 7:
+                        continue
+                    if user_phone_clean and phone_clean == user_phone_clean:
+                        continue
+                    
+                    calls.append({
+                        'type': call_type,
+                        'phone': phone,
+                        'start_time': start_time,
+                        'duration': duration,
+                        'duration_sec': self.parse_duration(duration)
+                    })
+                    data_count += 1
+                except:
+                    continue
+            
+            print(f'XLS解析到 {data_count} 条记录')
+            return calls
+        except Exception as e:
+            print(f'解析xls失败: {e}')
+            return []
+    
     def parse_xlsx(self, file_path):
+        """解析xlsx文件"""
         try:
             import pandas as pd
             df = pd.read_excel(file_path)
             calls = []
             
-            # 找列名
+            print(f'XLSX列名: {df.columns.tolist()[:8]}')
+            
+            # 找列索引
             cols = df.columns.tolist()
             col_map = {}
             for c in cols:
                 c_clean = c.replace(' ', '')
                 if '开始时间' in c_clean:
                     col_map['start_time'] = c
-                elif '对方号码' in c_clean:
+                elif '对端号码' in c_clean:
                     col_map['phone'] = c
-                elif '通话时长' in c_clean and '时长2' not in c_clean:
+                elif '通话时长' in c_clean:
                     col_map['duration'] = c
-                elif c == '类型':
+                elif '事件类型' in c_clean:
                     col_map['type'] = c
+                elif '用户号码' in c_clean:
+                    col_map['user_phone'] = c
+            
+            print(f'XLSX列映射: {col_map}')
             
             for _, row in df.iterrows():
                 try:
-                    phone = str(row.get(col_map.get('phone', '对方号码'), '')).strip()
-                    if not phone or len(phone) < 7:
-                        continue
-                    if phone == self.user_phone:
+                    phone = str(row.get(col_map.get('phone', '对端号码'), '')).strip()
+                    if not phone:
                         continue
                     
-                    duration = str(row.get(col_map.get('duration', '通话时长'), '0秒'))
-                    call = {
-                        'type': str(row.get(col_map.get('type', '类型'), '')).strip(),
+                    phone_clean = re.sub(r'[^\d]', '', phone)
+                    if len(phone_clean) < 7:
+                        continue
+                    
+                    user_phone = str(row.get(col_map.get('user_phone', '用户号码'), '')).strip()
+                    user_phone_clean = re.sub(r'[^\d]', '', user_phone)
+                    if user_phone_clean and phone_clean == user_phone_clean:
+                        continue
+                    
+                    duration = str(row.get(col_map.get('duration', '通话时长'), '0'))
+                    calls.append({
+                        'type': str(row.get(col_map.get('type', '事件类型'), '')).strip(),
                         'phone': phone,
                         'start_time': str(row.get(col_map.get('start_time', '开始时间'), '')).strip(),
                         'duration': duration,
                         'duration_sec': self.parse_duration(duration),
-                    }
-                    calls.append(call)
+                    })
                 except:
                     continue
+            
+            print(f'XLSX解析到 {len(calls)} 条记录')
             return calls
         except Exception as e:
             print(f'解析xlsx失败: {e}')
@@ -166,8 +268,8 @@ class CallAnalyzer:
         hours = total_duration // 3600
         minutes = (total_duration % 3600) // 60
         seconds = total_duration % 60
-        incoming = len([c for c in self.calls if c['type'] == '被叫'])
-        outgoing = len([c for c in self.calls if c['type'] == '主叫'])
+        incoming = len([c for c in self.calls if '被叫' in c['type']])
+        outgoing = len([c for c in self.calls if '主叫' in c['type']])
         return {
             'total_calls': total_calls,
             'total_duration': f'{hours}小时{minutes}分{seconds}秒',
@@ -189,11 +291,18 @@ class CallAnalyzer:
         contacts = []
         for phone, data in contact_map.items():
             d = data['total_duration']
+            h = d // 3600
+            m = (d % 3600) // 60
+            s = d % 60
+            if h > 0:
+                dur_str = f'{h}小时{m}分{s}秒'
+            else:
+                dur_str = f'{m}分{s}秒'
             contacts.append({
                 'phone': phone,
                 'count': data['count'],
-                'duration': f'{d // 60}分{d % 60}秒',
-                'last_call': data['last_call'].split(' ')[0]
+                'duration': dur_str,
+                'last_call': data['last_call'].split(' ')[0] if data['last_call'] else '-'
             })
         contacts.sort(key=lambda x: x['count'], reverse=True)
         strangers = [c for c in contacts if c['count'] == 1]
@@ -383,7 +492,10 @@ class CallAnalyzerApp:
                         content = f.read()
                     calls = self.analyzer.parse_csv(content)
                     self.analyzer.calls.extend(calls)
-                elif ext in ['.xls', '.xlsx']:
+                elif ext == '.xls':
+                    calls = self.analyzer.parse_xls(file_path)
+                    self.analyzer.calls.extend(calls)
+                elif ext == '.xlsx':
                     calls = self.analyzer.parse_xlsx(file_path)
                     self.analyzer.calls.extend(calls)
             except Exception as e:
