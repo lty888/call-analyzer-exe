@@ -18,8 +18,8 @@ jobs:
         with:
           python-version: '3.11'
           
-      - name: Install PyInstaller
-        run: pip install pyinstaller
+      - name: Install dependencies
+        run: pip install xlrd openpyxl pyinstaller
         
       - name: Build EXE
         run: pyinstaller --onefile --windowed --name "话单分析工具" call-analyzer.py
